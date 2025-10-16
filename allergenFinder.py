@@ -54,7 +54,7 @@ def searchDB(recipe):
 
 
 def runAPI(recipe):
-    api_key = "*********"
+    api_key = "*******"
     url = "https://api.spoonacular.com/recipes/complexSearch"
 
 
