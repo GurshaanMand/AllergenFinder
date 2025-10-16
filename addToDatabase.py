@@ -11,8 +11,8 @@ url = "https://api.spoonacular.com/recipes/complexSearch"
 
 
 params = {
-    "query": "chicken",
-    "number": 20,
+    "query": "poutine",
+    "number": 1,
     "offset": 0,
     "apiKey": api_key
 }
@@ -33,9 +33,9 @@ CREATE TABLE IF NOT EXISTS Recipe(
 """)
 
 data = d.json()
-# print("Total Results:", data["totalResults"])
+print("Total Results:", data["totalResults"])
 
-list = ["dairy", "egg", "gluten", "grain", "peanut", "seafood", "sesame", "shellfish", "soy", "sulfite", "tree nut", "wheat", "cheese"]
+allAllergies = ["dairy", "egg", "gluten", "grain", "peanut", "seafood", "sesame", "shellfish", "soy", "sulfite", "tree nut", "wheat", "cheese"]
 
 for i in data["results"]:
     id  = i["id"]
@@ -58,16 +58,20 @@ for i in data["results"]:
     ingre = m.get("extendedIngredients", [])
     # lst = ingredients.rstrip().lower().split()
 
-    allergens = ""
+    foundAllergies = list()
 
     for j in ingre:
-        nam = j["name"].lower()
-        aisle = j["aisle"].lower()
-        for allergen in list:
+        nam = j.get("name","").lower()
+        aisle = j.get("aisle","").lower()
+        for allergen in allAllergies:
             if allergen in nam or allergen in aisle:
-                allergens += allergen + " "
+                if allergen not in foundAllergies:
+                    foundAllergies.append(allergen)
+                
+    #remove duplicates in allergens
+    #Basically removing duplicate parts of a string
+    jString = json.dumps(foundAllergies) 
 
-    print(id, name, allergens)
-    curr.execute("INSERT OR IGNORE INTO Recipe (id, name, allergens) VALUES (?,?, ?)", (id, name, allergens))
-
-conn.commit()
+    print(id, name, jString)
+    curr.execute("INSERT OR IGNORE INTO Recipe (id, name, allergens) VALUES (?,?, ?)", (id, name, jString))
+    conn.commit()
