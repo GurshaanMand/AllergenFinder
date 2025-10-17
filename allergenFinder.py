@@ -1,10 +1,11 @@
-#ADD: when retrieving from api if smt happens and i need to restart i only want to re retrieve things i havent previouslyt retrieved
 import sqlite3
 import requests
 import json
+from rapidfuzz import process, fuzz
 
 conn = sqlite3.connect('allergen.sqlite')
 curr = conn.cursor()
+
 
 def interFace():
     all = userInput("", "")
@@ -12,13 +13,13 @@ def interFace():
     searchDB(all[0])
 
 
-
 def userInput(recipe, allergy):
-    recipe = input("Enter the food you want to check for allergens: ")
+    recipe = input("Enter the food you want to check for allergens: ").lower()
     l = list()
 
-    while(True):
-        allergy = input("Enter the Allergy you want to check for, type 'done' when finished: ").lower()
+    while (True):
+        allergy = input(
+            "Enter the Allergy you want to check for, type 'done' when finished: ").lower()
         if allergy == "done":
             break
         l.append(allergy)
@@ -29,37 +30,65 @@ def userInput(recipe, allergy):
 
     return all
 
-def searchDB(recipe):
-    curr.execute("SELECT EXISTS(SELECT 1 FROM Recipe WHERE name = ?)", (recipe.lower(),))
-    exists = curr.fetchone()[0] #EXISTS return 1 if at least one row exists otherwise 0
 
+def searchDB(recipe):
+    curr.execute("SELECT EXISTS(SELECT 1 FROM Recipe WHERE name = ?)", (recipe,))
+    exists = curr.fetchone()[0]  # EXISTS return 1 if at least one row exists otherwise 0
 
     if exists == 1:
-        #recipe name exists
-        curr.execute("SELECT allergens FROM Recipe WHERE name = ?", (recipe.lower(),))
+        # recipe name exists
+        curr.execute("SELECT allergens FROM Recipe WHERE name = ?", (recipe,))
         row = curr.fetchone()[0]
         listAllergies = json.loads(row)
         print("Allergen in ", recipe, ": ", listAllergies)
     elif exists == 0:
-        #recipe name does not exist
-        #-If the name of the recipe is not in the database then send the api request for that recipe
-        print("Sending request to database...")
-        runAPI(recipe)
-        return
+        # recipe name does not exist
+        # -If the name of the recipe is not in the database then send the api request for that recipe
+        # use rapidfuzz to spell check the catagory
+        curr.execute("SELECT category FROM Recipe")
+        allCatagories = [r[0] for r in curr.fetchall()]
+        catagoryMatch = process.extractOne(recipe, allCatagories, scorer=fuzz.ratio)
+
+        if (catagoryMatch[1] > 80):  # Get a potential catagory
+            print("Does your recipe fall under: ", catagoryMatch[0])
+            confirm = input("Enter Y to confirm, N to search online: ").lower()
+
+            if confirm == "y":  # if catagory recomendation is correct
+
+                curr.execute("SELECT name FROM Recipe WHERE category = ?",
+                             (catagoryMatch[0].lower(),))
+                all_names = [r[0] for r in curr.fetchall()]
+
+                match = process.extractOne(recipe, all_names, scorer=fuzz.ratio)
+                # Get a potential recipe match
+                if (match[1] > 60):
+                    print("Did you mean: ", match[0])
+                    confirm = input("Enter Y to confirm, N to search online: ").lower()
+
+                    if confirm == "y":
+                        curr.execute("SELECT allergens FROM Recipe WHERE name = ?", (match[0],))
+                        row = curr.fetchone()
+                        print(f"Allergens in {match[0]}: {row[0]}")
+                        return
+                    else:
+                        print("Sending request to database...")
+                        runAPI(recipe)
+                        return
+            else:
+                # If catagory match fails send API request
+                print("Sending request to database...")
+                runAPI(recipe)
+                return
     else:
         print("Something went wrong")
-
-
-    
 
 
 def runAPI(recipe):
     api_key = "*******"
     url = "https://api.spoonacular.com/recipes/complexSearch"
 
-
     params = {
-        "query": (recipe.lower()),
+        "query": (recipe),
         "number": 5,
         "offset": 0,
         "apiKey": api_key
@@ -70,27 +99,43 @@ def runAPI(recipe):
     except:
         print("Something went wrong, try again.")
 
-    data = d.json() #data variable is json
-    
+    data = d.json()  # data variable is json
+
+    print(data)
+
+    if data.get("status") == "failure":
+        print("Message:", data.get("message", "Unknown error"))
+        return
+
+    if not data.get("results"):
+        print("No results found for", recipe)
+        return
 
     if (data["totalResults"]) == 0:
         print("Couldn't find your item ", recipe, " in database")
     else:
-        allAllergies = ["dairy", "egg", "gluten", "grain", "peanut", "seafood", "sesame", "shellfish", "soy", "sulfite", "tree nut", "wheat", "cheese"]
-
+        allAllergies = ["dairy", "egg", "gluten", "grain", "peanut", "seafood",
+                        "sesame", "shellfish", "soy", "sulfite", "tree nut", "wheat", "cheese"]
+        inserted = False
         for i in data["results"]:
-            id  = i["id"]
+            id = i["id"]
             name = i["title"].lower()
-            
 
-            url = "https://api.spoonacular.com/recipes/" + str(id) + "/information?includeNutrition=false&addWinePairing=false&addTasteData=false"
+            # Skip if already exists
+            curr.execute("SELECT 1 FROM Recipe WHERE id = ?", (id,))
+            if curr.fetchone():
+                print(f"Skipping existing recipe: {name}")
+                continue
+
+            url = "https://api.spoonacular.com/recipes/" + \
+                str(id) + "/information?includeNutrition=false&addWinePairing=false&addTasteData=false"
 
             params = {
-            "apiKey": api_key
+                "apiKey": api_key
             }
 
             try:
-                m = requests.get(url ,params=params)
+                m = requests.get(url, params=params)
             except Exception as e:
                 print("Request failed:", e)
 
@@ -101,20 +146,30 @@ def runAPI(recipe):
             foundAllergies = list()
 
             for j in ingre:
-                nam = j.get("name","").lower()
-                aisle = j.get("aisle","").lower()
+                nam = j.get("name", "").lower()
+                aisle = j.get("aisle", "").lower()
                 for allergen in allAllergies:
                     if allergen in nam or allergen in aisle:
                         if allergen not in foundAllergies:
                             foundAllergies.append(allergen)
-                        
-            #remove duplicates in allergens
-            #Basically removing duplicate parts of a string
-            jString = json.dumps(foundAllergies) 
+
+            # remove duplicates in allergens
+            # Basically removing duplicate parts of a string
+            jString = json.dumps(foundAllergies)
 
             print(id, name, jString)
-            curr.execute("INSERT OR IGNORE INTO Recipe (id, name, allergens) VALUES (?,?, ?)", (id, name, jString))
+            curr.execute(
+                "INSERT OR IGNORE INTO Recipe (id, name, allergens) VALUES (?,?, ?)", (id, name, jString))
             conn.commit()
+            inserted = True
+            print(f"✅ Added {name} with allergens {foundAllergies}")
 
-    searchDB(recipe)
+        # only recheck if something was successfully inserted
+        if inserted:
+            print("Checking database for your recipe again...")
+            searchDB(recipe)
+        else:
+            print("No new data inserted; skipping recheck.")
+
+
 interFace()
