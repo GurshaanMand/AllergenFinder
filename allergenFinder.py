@@ -43,42 +43,25 @@ def searchDB(recipe):
         print("Allergen in ", recipe, ": ", listAllergies)
     elif exists == 0:
         # recipe name does not exist
-        # -If the name of the recipe is not in the database then send the api request for that recipe
-        # use rapidfuzz to spell check the catagory
-        curr.execute("SELECT category FROM Recipe")
-        allCatagories = [r[0] for r in curr.fetchall()]
-        catagoryMatch = process.extractOne(recipe, allCatagories, scorer=fuzz.ratio)
+        # use rapidfuzz to suggest the closest stored recipe before calling the API
+        curr.execute("SELECT name FROM Recipe")
+        all_names = [r[0] for r in curr.fetchall()]
+        match = process.extractOne(recipe, all_names, scorer=fuzz.WRatio) if all_names else None
 
-        if (catagoryMatch[1] > 80):  # Get a potential catagory
-            print("Does your recipe fall under: ", catagoryMatch[0])
+        if match and match[1] > 60:  # Get a potential recipe match
+            print("Did you mean: ", match[0])
             confirm = input("Enter Y to confirm, N to search online: ").lower()
 
-            if confirm == "y":  # if catagory recomendation is correct
-
-                curr.execute("SELECT name FROM Recipe WHERE category = ?",
-                             (catagoryMatch[0].lower(),))
-                all_names = [r[0] for r in curr.fetchall()]
-
-                match = process.extractOne(recipe, all_names, scorer=fuzz.ratio)
-                # Get a potential recipe match
-                if (match[1] > 60):
-                    print("Did you mean: ", match[0])
-                    confirm = input("Enter Y to confirm, N to search online: ").lower()
-
-                    if confirm == "y":
-                        curr.execute("SELECT allergens FROM Recipe WHERE name = ?", (match[0],))
-                        row = curr.fetchone()
-                        print(f"Allergens in {match[0]}: {row[0]}")
-                        return
-                    else:
-                        print("Sending request to database...")
-                        runAPI(recipe)
-                        return
-            else:
-                # If catagory match fails send API request
-                print("Sending request to database...")
-                runAPI(recipe)
+            if confirm == "y":
+                curr.execute("SELECT allergens FROM Recipe WHERE name = ?", (match[0],))
+                row = curr.fetchone()
+                print(f"Allergens in {match[0]}: {row[0]}")
                 return
+
+        # No close match, or the suggestion was rejected: send API request
+        print("Sending request to database...")
+        runAPI(recipe)
+        return
     else:
         print("Something went wrong")
 
